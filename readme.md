@@ -1,6 +1,7 @@
 # AdGuardVPNGUI
 
 AdGuardVPNGUI provides a GUI for the Linux AdGuard VPN CLI
+![Screenshot_20250301_095003](https://github.com/user-attachments/assets/3c385c0e-c4d4-45f8-a642-2f36429d9474)
 
 ## Features
 
@@ -30,6 +31,7 @@ AdGuardVPNGUI provides a GUI for the Linux AdGuard VPN CLI
 3. Run the binary:
    ```
    ./AdGuardVPN
+   ```
 
 ### Build Binary (This will install the binary to /usr/local/bin and create a desktop file)
 
