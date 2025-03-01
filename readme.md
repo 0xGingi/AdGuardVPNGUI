@@ -41,7 +41,7 @@ AdGuardVPNGUI provides a GUI for the Linux AdGuard VPN CLI
    ```
    cd AdguardVPNGUI
    ```
-3. Build/Install the binary and create desktop file:
+3. Build/Install the binary:
    ```
    python build.py
    ```

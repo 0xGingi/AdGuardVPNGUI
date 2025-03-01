@@ -1,7 +1,0 @@
-[Desktop Entry]
-Name=AdGuard VPN
-Comment=GUI for AdGuard VPN CLI
-Exec=/usr/local/bin/AdGuardVPN
-Terminal=false
-Type=Application
-Categories=Network;VPN;

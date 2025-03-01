@@ -5,6 +5,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, scrolledtext
 import urllib.request
 import json
+import sys
 
 class AdGuardVPNGUI:
     def __init__(self, root):
@@ -18,11 +19,21 @@ class AdGuardVPNGUI:
         self.text_color = "#333333"
         self.root.configure(bg=self.bg_color)
         
+        # Initialize early logs storage
+        self._early_logs = []
+        
         self.find_executable()
         
         self.is_logged_in = False
         
         self.setup_tabs()
+        
+        # Display early logs once the UI is set up
+        self.display_early_logs()
+        
+        # Add permission check
+        if not self.check_permissions():
+            self.show_permissions_warning()
         
         self.check_login_status()
 
@@ -31,12 +42,20 @@ class AdGuardVPNGUI:
             "/usr/bin/adguardvpn-cli",
             "/usr/local/bin/adguardvpn-cli",
             "/opt/adguardvpn_cli/adguardvpn-cli",
-            os.path.expanduser("~/.local/bin/adguardvpn-cli")
+            os.path.expanduser("~/.local/bin/adguardvpn-cli"),
+            "/usr/bin/adguardvpn"
         ]
+        
+        # Get the current script directory when running as binary
+        if getattr(sys, 'frozen', False):
+            application_path = os.path.dirname(sys.executable)
+            self.log(f"Running as binary from: {application_path}")
+            possible_locations.append(os.path.join(application_path, "adguardvpn-cli"))
         
         for location in possible_locations:
             if os.path.isfile(location) and os.access(location, os.X_OK):
                 self.executable = location
+                self.log(f"Found executable at: {location}")
                 return
         
         try:
@@ -44,11 +63,13 @@ class AdGuardVPNGUI:
                                          capture_output=True, text=True, check=False)
             if which_result.returncode == 0 and which_result.stdout.strip():
                 self.executable = which_result.stdout.strip()
+                self.log(f"Found executable via 'which': {self.executable}")
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            self.log(f"Error running 'which': {e}")
         
         self.executable = "/usr/bin/adguardvpn-cli"  # Default fallback
+        self.log(f"Using default fallback path: {self.executable}")
         self.root.after(100, self.show_executable_warning)
     
     def show_executable_warning(self):
@@ -72,6 +93,51 @@ class AdGuardVPNGUI:
                         "Error",
                         f"The selected file '{selected_file}' is not executable."
                     )
+
+    def check_permissions(self):
+        """Check if we have permission to run the VPN commands"""
+        self.log(f"Checking permissions for: {self.executable}")
+        
+        if not os.path.exists(self.executable):
+            self.log(f"Warning: Executable does not exist at: {self.executable}")
+            return False
+        
+        if not os.access(self.executable, os.X_OK):
+            self.log(f"Warning: No execution permission for: {self.executable}")
+            return False
+        
+        # Try to run a basic command
+        try:
+            result = subprocess.run(
+                [self.executable, "--version"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=5,
+                env=os.environ.copy()
+            )
+            if result.returncode == 0:
+                self.log(f"Permission check passed: {result.stdout.strip()}")
+                return True
+            else:
+                self.log(f"Permission check failed: {result.stderr}")
+                return False
+        except subprocess.TimeoutExpired:
+            self.log("Permission check timed out")
+            return False
+        except Exception as e:
+            self.log(f"Permission check error: {e}")
+            return False
+
+    def show_permissions_warning(self):
+        """Show a warning about permission issues"""
+        messagebox.showwarning(
+            "Permission Issue",
+            f"The application may not have the necessary permissions to run AdGuard VPN commands. "
+            f"This can happen when running as a packaged application.\n\n"
+            f"You might need to run the application with elevated privileges or "
+            f"ensure the VPN CLI ({self.executable}) has the proper permissions."
+        )
 
     def setup_tabs(self):
         self.tab_control = ttk.Notebook(self.root)
@@ -470,7 +536,7 @@ class AdGuardVPNGUI:
         version_text = f"CLI Version: {version}" if version else "CLI Version: Unknown"
         
         tk.Label(info_frame, text=version_text, font=("Arial", 12), bg=self.bg_color).pack(pady=5)
-        tk.Label(info_frame, text="GUI Version: 1.0.0", font=("Arial", 12), bg=self.bg_color).pack(pady=5)
+        tk.Label(info_frame, text="GUI Version: 1.1.0", font=("Arial", 12), bg=self.bg_color).pack(pady=5)
         
         # Show CLI path
         tk.Label(info_frame, text=f"CLI Path: {self.executable}", font=("Arial", 10), bg=self.bg_color).pack(pady=5)
@@ -568,23 +634,28 @@ class AdGuardVPNGUI:
     def run_command(self, args, check_error=True):
         """Run an AdGuardVPN CLI command synchronously and return the output"""
         try:
-            # Prepare the command
             cmd = [self.executable] + args
             self.log(f"Running command: {' '.join(cmd)}")
             
-            # Run the command
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            # Set environment variables that might be needed
+            env = os.environ.copy()
             
-            # Log the command output
+            # Run the command with proper environment
+            result = subprocess.run(
+                cmd, 
+                capture_output=True, 
+                text=True,
+                check=False,
+                env=env
+            )
+            
             if result.stdout:
                 self.log(f"Command output: {result.stdout.strip()}")
             
-            # Check for errors
             if check_error and result.returncode != 0:
                 error_message = f"Command error ({result.returncode}): {result.stderr.strip()}"
                 self.log(error_message)
                 
-                # Check for login errors
                 if "you must log in" in result.stderr.lower() or "you are not logged in" in result.stderr.lower():
                     self.is_logged_in = False
                     if messagebox.askyesno("Login Required", 
@@ -802,28 +873,62 @@ class AdGuardVPNGUI:
                     self.ip_label.config(text=ip_part[1].strip())
 
     def toggle_connection(self):
-        # First check login status
         if not self.is_logged_in:
             self.log("Not logged in. Please log in first.")
             self.show_login_dialog()
             return
         
         if self.connect_button.cget("text") == "Connect":
-            # When connecting, show a status message and disable the button temporarily
             self.log("Connecting to VPN...")
             self.status_label.config(text="Status: Connecting...")
             self.status_indicator.itemconfig(self.status_circle, fill="yellow")
             self.connect_button.config(state="disabled")
             
-            # Get the fastest location
-            self.run_command_async(["connect", "--fastest"], self.handle_connection_result)
+            try:
+                cmd = [self.executable, "connect", "--fastest"]
+                self.log(f"Running direct connection command: {' '.join(cmd)}")
+                
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    env=os.environ.copy()  # Ensure environment variables are passed
+                )
+                
+                if result.returncode != 0:
+                    self.log(f"Connection error: {result.stderr}")
+                    self.handle_connection_result(f"Error: {result.stderr}")
+                else:
+                    self.handle_connection_result(result.stdout)
+            except Exception as e:
+                self.log(f"Exception during connection: {str(e)}")
+                self.handle_connection_result(f"Error: {str(e)}")
         else:
-            # When disconnecting, show a status message and disable the button temporarily
             self.log("Disconnecting from VPN...")
             self.status_label.config(text="Status: Disconnecting...")
             self.connect_button.config(state="disabled")
             
-            self.run_command_async(["disconnect"], self.handle_disconnection_result)
+            try:
+                cmd = [self.executable, "disconnect"]
+                self.log(f"Running direct disconnect command: {' '.join(cmd)}")
+                
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    env=os.environ.copy()
+                )
+                
+                if result.returncode != 0:
+                    self.log(f"Disconnect error: {result.stderr}")
+                    self.handle_disconnection_result(f"Error: {result.stderr}")
+                else:
+                    self.handle_disconnection_result(result.stdout)
+            except Exception as e:
+                self.log(f"Exception during disconnection: {str(e)}")
+                self.handle_disconnection_result(f"Error: {str(e)}")
 
     def handle_connection_result(self, result):
         self.log_result(result)
@@ -835,7 +940,15 @@ class AdGuardVPNGUI:
             self.status_label.config(text="Status: Connection Failed")
             self.status_indicator.itemconfig(self.status_circle, fill="red")
             self.connect_button.config(text="Connect")
-            messagebox.showerror("Connection Failed", "Failed to connect to VPN. See logs for details.")
+            
+            # Show more detailed error message
+            error_details = "Failed to connect to VPN."
+            if "permission" in result.lower() or "access" in result.lower() or "denied" in result.lower():
+                error_details += "\n\nThis may be a permissions issue. Try running the application with sudo or from the terminal."
+            elif "process" in result.lower():
+                error_details += "\n\nFailed to start the VPN process. The VPN service may not be installed or may require elevated privileges."
+            
+            messagebox.showerror("Connection Failed", error_details)
         else:
             # After connecting, check status to update UI with a small delay
             self.root.after(2000, lambda: self.run_command_async(["status"], self.process_status))
@@ -856,6 +969,13 @@ class AdGuardVPNGUI:
         self.protocol_label.config(text="Not connected")
 
     def log(self, message):
+        # Store early logs for later display
+        if not hasattr(self, '_early_logs'):
+            self._early_logs = []
+        
+        # Print to console for debugging
+        print(f"LOG: {message}")
+        
         # Make sure we're updating the GUI from the main thread
         if threading.current_thread() is threading.main_thread():
             self._update_log(message)
@@ -865,10 +985,20 @@ class AdGuardVPNGUI:
 
     def _update_log(self, message):
         # This runs in the main thread
-        self.log_text.config(state="normal")
-        self.log_text.insert(tk.END, message + "\n")
-        self.log_text.see(tk.END)
-        self.log_text.config(state="disabled")
+        if not hasattr(self, 'log_text') or self.log_text is None:
+            # Store the message for later if log_text doesn't exist yet
+            if not hasattr(self, '_early_logs'):
+                self._early_logs = []
+            self._early_logs.append(message)
+            return
+        
+        try:
+            self.log_text.config(state="normal")
+            self.log_text.insert(tk.END, message + "\n")
+            self.log_text.see(tk.END)
+            self.log_text.config(state="disabled")
+        except Exception as e:
+            print(f"Error updating log: {e}")
 
     def log_result(self, result):
         self.log(result)
@@ -1012,7 +1142,6 @@ class AdGuardVPNGUI:
 
     def connect_to_selected(self):
         """Connect to the selected location"""
-        # First check login status
         if not self.is_logged_in:
             self.log("Not logged in. Please log in first.")
             self.show_login_dialog()
@@ -1023,7 +1152,6 @@ class AdGuardVPNGUI:
             messagebox.showinfo("Information", "Please select a location")
             return
         
-        # Get the city from the selected item
         city = self.location_tree.item(selected, "values")[2]
         if not city:
             messagebox.showinfo("Error", "Could not determine the selected location")
@@ -1034,14 +1162,31 @@ class AdGuardVPNGUI:
         self.status_indicator.itemconfig(self.status_circle, fill="yellow")
         self.connect_button.config(state="disabled")
         
-        self.run_command_async(["connect", "--location", city], self.handle_connection_result)
+        try:
+            cmd = [self.executable, "connect", "--location", city]
+            self.log(f"Running direct connection command: {' '.join(cmd)}")
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                env=os.environ.copy()
+            )
+            
+            if result.returncode != 0:
+                self.log(f"Connection error: {result.stderr}")
+                self.handle_connection_result(f"Error: {result.stderr}")
+            else:
+                self.handle_connection_result(result.stdout)
+        except Exception as e:
+            self.log(f"Exception during connection: {str(e)}")
+            self.handle_connection_result(f"Error: {str(e)}")
         
-        # Switch to main tab
         self.tab_control.select(0)
 
     def connect_to_fastest(self):
         """Connect to the fastest location"""
-        # First check login status
         if not self.is_logged_in:
             self.log("Not logged in. Please log in first.")
             self.show_login_dialog()
@@ -1052,9 +1197,27 @@ class AdGuardVPNGUI:
         self.status_indicator.itemconfig(self.status_circle, fill="yellow")
         self.connect_button.config(state="disabled")
         
-        self.run_command_async(["connect", "--fastest"], self.handle_connection_result)
+        try:
+            cmd = [self.executable, "connect", "--fastest"]
+            self.log(f"Running direct connection command: {' '.join(cmd)}")
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                env=os.environ.copy()
+            )
+            
+            if result.returncode != 0:
+                self.log(f"Connection error: {result.stderr}")
+                self.handle_connection_result(f"Error: {result.stderr}")
+            else:
+                self.handle_connection_result(result.stdout)
+        except Exception as e:
+            self.log(f"Exception during connection: {str(e)}")
+            self.handle_connection_result(f"Error: {str(e)}")
         
-        # Switch to main tab
         self.tab_control.select(0)
 
     # Settings tab methods
@@ -1368,6 +1531,19 @@ class AdGuardVPNGUI:
             else:
                 self.log(f"Logout error: {result}")
                 messagebox.showerror("Logout Error", "Could not log out properly. See logs for details.")
+
+    def display_early_logs(self):
+        """Display any logs that were generated before the UI was fully set up"""
+        if hasattr(self, '_early_logs') and hasattr(self, 'log_text'):
+            for message in self._early_logs:
+                try:
+                    self.log_text.config(state="normal")
+                    self.log_text.insert(tk.END, message + "\n")
+                    self.log_text.see(tk.END)
+                    self.log_text.config(state="disabled")
+                except Exception as e:
+                    print(f"Error displaying early log: {e}")
+            self._early_logs = []
 
 if __name__ == "__main__":
     root = tk.Tk()
