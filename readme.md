@@ -33,7 +33,7 @@ AdGuardVPNGUI provides a GUI for the Linux AdGuard VPN CLI
    ./AdGuardVPN
    ```
 
-### Build Binary (This will install the binary to /usr/local/bin and create a desktop file)
+### Build Binary (This will install the binary to /usr/local/bin/AdGuardVPN and create a desktop file)
 
 1. Clone this repository:
    ```
